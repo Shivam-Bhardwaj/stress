@@ -9,6 +9,7 @@ RESULTS_DIR="$SCRIPT_DIR/results/$(date +%Y%m%d_%H%M%S)"
 VERBOSE="${STRESS_VERBOSE:-0}"
 FAIL_FAST="${STRESS_FAIL_FAST:-0}"
 SMALL_MODE="${STRESS_SMALL:-0}"
+STRESS_DURATION="${STRESS_DURATION:-10}"
 mkdir -p "$RESULTS_DIR"
 
 echo "=========================================="
@@ -93,6 +94,45 @@ print_sysinfo() {
 }
 
 print_sysinfo
+
+apply_duration_profile() {
+  local d="$STRESS_DURATION"
+  case "$d" in
+    5|5m|5min)
+      export STRESS_MEM_BW_MB="${STRESS_MEM_BW_MB:-256}"
+      export STRESS_DISK_MB="${STRESS_DISK_MB:-512}"
+      export STRESS_MULTICORE_SCALE="${STRESS_MULTICORE_SCALE:-1}"
+      export STRESS_THERMAL_DURATION="${STRESS_THERMAL_DURATION:-30}"
+      export STRESS_ASYNC_REQUESTS="${STRESS_ASYNC_REQUESTS:-6000}"
+      export STRESS_ASYNC_CONCURRENCY="${STRESS_ASYNC_CONCURRENCY:-100}"
+      export STRESS_ASYNC_FILES="${STRESS_ASYNC_FILES:-400}"
+      export STRESS_ROWS="${STRESS_ROWS:-300000}"
+      export STRESS_SMALL=1
+      ;;
+    30|30m|30min)
+      export STRESS_MEM_BW_MB="${STRESS_MEM_BW_MB:-1024}"
+      export STRESS_DISK_MB="${STRESS_DISK_MB:-2048}"
+      export STRESS_MULTICORE_SCALE="${STRESS_MULTICORE_SCALE:-3}"
+      export STRESS_THERMAL_DURATION="${STRESS_THERMAL_DURATION:-180}"
+      export STRESS_ASYNC_REQUESTS="${STRESS_ASYNC_REQUESTS:-20000}"
+      export STRESS_ASYNC_CONCURRENCY="${STRESS_ASYNC_CONCURRENCY:-200}"
+      export STRESS_ASYNC_FILES="${STRESS_ASYNC_FILES:-1200}"
+      export STRESS_ROWS="${STRESS_ROWS:-1000000}"
+      ;;
+    10|10m|10min|*)
+      export STRESS_MEM_BW_MB="${STRESS_MEM_BW_MB:-512}"
+      export STRESS_DISK_MB="${STRESS_DISK_MB:-1024}"
+      export STRESS_MULTICORE_SCALE="${STRESS_MULTICORE_SCALE:-2}"
+      export STRESS_THERMAL_DURATION="${STRESS_THERMAL_DURATION:-60}"
+      export STRESS_ASYNC_REQUESTS="${STRESS_ASYNC_REQUESTS:-12000}"
+      export STRESS_ASYNC_CONCURRENCY="${STRESS_ASYNC_CONCURRENCY:-150}"
+      export STRESS_ASYNC_FILES="${STRESS_ASYNC_FILES:-800}"
+      export STRESS_ROWS="${STRESS_ROWS:-600000}"
+      ;;
+  esac
+}
+
+apply_duration_profile
 
 bench_names=(
   "Rust: Matrix Multiply"
@@ -196,7 +236,7 @@ print_menu() {
   echo ""
   echo "Enter numbers (space/comma separated), a group (rust/python/cpp/system), or 'all'."
   echo "Press Enter for 'all'."
-  echo "Env: STRESS_VERBOSE=1 STRESS_FAIL_FAST=1 STRESS_SMALL=1"
+  echo "Env: STRESS_DURATION=5|10|30 STRESS_VERBOSE=1 STRESS_FAIL_FAST=1 STRESS_SMALL=1"
   echo ""
 }
 

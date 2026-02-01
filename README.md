@@ -14,6 +14,14 @@ Optional env flags:
 STRESS_VERBOSE=1 STRESS_SMALL=1 STRESS_FAIL_FAST=1 bash run_all.sh
 ```
 
+Duration profiles (auto‑tune test sizes):
+
+```bash
+STRESS_DURATION=5 bash run_all.sh   # ~5 minutes
+STRESS_DURATION=10 bash run_all.sh  # ~10 minutes (default)
+STRESS_DURATION=30 bash run_all.sh  # ~30 minutes
+```
+
 Scaling & overrides:
 
 ```bash
