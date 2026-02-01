@@ -14,6 +14,11 @@ const PORT = process.env.PORT || 3000;
 const MACHINES_FILE = path.join(__dirname, '..', 'machines.json');
 const RESULTS_FILE = path.join(__dirname, '..', 'results.json');
 
+function log(tag, ...args) {
+  const ts = new Date().toISOString().slice(11, 23);
+  console.log(`[${ts}] [${tag}]`, ...args);
+}
+
 // ── Middleware ───────────────────────────────────────────
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '..', 'web')));
@@ -43,11 +48,13 @@ function saveResults(results) {
 
 // ── REST API ────────────────────────────────────────────
 app.get('/api/machines', (req, res) => {
+  log('API', 'GET /api/machines');
   const machines = loadMachines().map(m => ({
     ...m,
     password: m.password ? '***' : undefined,
     privateKey: m.privateKey ? '***' : undefined,
   }));
+  log('API', `Returning ${machines.length} machine(s)`);
   res.json(machines);
 });
 
@@ -64,17 +71,21 @@ app.post('/api/machines', (req, res) => {
   };
   machines.push(machine);
   saveMachines(machines);
+  log('API', `Machine added: "${machine.name}" (${machine.username}@${machine.host}:${machine.port}) [id=${machine.id}]`);
   res.json({ ...machine, password: machine.password ? '***' : undefined });
 });
 
 app.delete('/api/machines/:id', (req, res) => {
   let machines = loadMachines();
+  const removed = machines.find(m => m.id === req.params.id);
   machines = machines.filter(m => m.id !== req.params.id);
   saveMachines(machines);
+  log('API', `Machine removed: "${removed?.name || req.params.id}"`);
   res.json({ ok: true });
 });
 
 app.get('/api/benchmarks', (req, res) => {
+  log('API', 'GET /api/benchmarks');
   const list = Object.entries(BENCHMARKS).map(([id, b]) => ({
     id,
     name: b.name,
@@ -86,21 +97,27 @@ app.get('/api/benchmarks', (req, res) => {
 });
 
 app.get('/api/results', (req, res) => {
+  log('API', 'GET /api/results');
   res.json(loadResults());
 });
 
 app.delete('/api/results', (req, res) => {
+  log('API', 'DELETE /api/results — clearing history');
   saveResults([]);
   res.json({ ok: true });
 });
 
 // ── WebSocket ───────────────────────────────────────────
-const activeRuns = new Map(); // runId -> { aborted }
+const activeRuns = new Map(); // runId -> { aborted, abortController }
 
-wss.on('connection', (ws) => {
+wss.on('connection', (ws, req) => {
+  const clientIp = req.socket.remoteAddress;
+  log('WS', `Client connected from ${clientIp}`);
+
   ws.on('message', async (raw) => {
     let msg;
     try { msg = JSON.parse(raw); } catch { return; }
+    log('WS', `Received message: type=${msg.type}${msg.runId ? ` runId=${msg.runId}` : ''}${msg.machineId ? ` machineId=${msg.machineId}` : ''}`);
 
     if (msg.type === 'test_connection') {
       await handleTestConnection(ws, msg);
@@ -108,8 +125,18 @@ wss.on('connection', (ws) => {
       await handleRunBenchmarks(ws, msg);
     } else if (msg.type === 'abort') {
       const run = activeRuns.get(msg.runId);
-      if (run) run.aborted = true;
+      if (run) {
+        log('RUN', `Abort requested for run ${msg.runId}`);
+        run.aborted = true;
+        if (run.abortController) run.abortController.abort();
+      } else {
+        log('RUN', `Abort requested but run ${msg.runId} not found`);
+      }
     }
+  });
+
+  ws.on('close', () => {
+    log('WS', `Client disconnected: ${clientIp}`);
   });
 });
 
@@ -117,14 +144,18 @@ async function handleTestConnection(ws, msg) {
   const machines = loadMachines();
   const machine = machines.find(m => m.id === msg.machineId);
   if (!machine) {
+    log('CONN', `Test connection: machine ${msg.machineId} not found in config`);
     ws.send(JSON.stringify({ type: 'connection_result', machineId: msg.machineId, success: false, error: 'Machine not found' }));
     return;
   }
+  log('CONN', `Testing connection to "${machine.name}" (${machine.username}@${machine.host}:${machine.port})...`);
   try {
     const runner = new SSHRunner(machine);
     const result = await runner.testConnection();
+    log('CONN', `Connection to "${machine.name}" succeeded in ${result.connectTimeMs}ms`);
     ws.send(JSON.stringify({ type: 'connection_result', machineId: msg.machineId, success: true, info: result.info, connectTimeMs: result.connectTimeMs }));
   } catch (err) {
+    log('CONN', `Connection to "${machine.name}" FAILED: ${err.message}`);
     ws.send(JSON.stringify({ type: 'connection_result', machineId: msg.machineId, success: false, error: err.message }));
   }
 }
@@ -132,7 +163,8 @@ async function handleTestConnection(ws, msg) {
 async function handleRunBenchmarks(ws, msg) {
   const { machineIds, benchmarkIds, runId } = msg;
   const machines = loadMachines();
-  const runState = { aborted: false };
+  const abortController = new AbortController();
+  const runState = { aborted: false, abortController };
   activeRuns.set(runId, runState);
 
   const send = (payload) => {
@@ -142,6 +174,11 @@ async function handleRunBenchmarks(ws, msg) {
   const selectedMachines = machines.filter(m => machineIds.includes(m.id));
   const totalBenchmarks = benchmarkIds.length * selectedMachines.length;
   let completed = 0;
+
+  log('RUN', `=== Starting run ${runId} ===`);
+  log('RUN', `Machines: ${selectedMachines.map(m => `"${m.name}" (${m.host})`).join(', ')}`);
+  log('RUN', `Benchmarks (${benchmarkIds.length}): ${benchmarkIds.join(', ')}`);
+  log('RUN', `Total tasks: ${totalBenchmarks}`);
 
   const runResults = {
     id: runId,
@@ -157,58 +194,81 @@ async function handleRunBenchmarks(ws, msg) {
     runResults.benchmarks[machine.id] = {};
 
     // Deploy benchmarks first
-    send({ type: 'output', runId, machineId: machine.id, text: `[${machine.name}] Deploying benchmarks...\n` });
+    log('RUN', `[${machine.name}] Phase 1: Deploying benchmarks to remote...`);
+    send({ type: 'output', runId, machineId: machine.id, text: `[${machine.name}] Phase 1: Deploying benchmarks...\n` });
     try {
       await runner.deployBenchmarks((text) => {
         send({ type: 'output', runId, machineId: machine.id, text: `[${machine.name}] ${text}` });
       });
+      log('RUN', `[${machine.name}] Deploy complete`);
     } catch (err) {
+      log('RUN', `[${machine.name}] Deploy FAILED: ${err.message}`);
       send({ type: 'output', runId, machineId: machine.id, text: `[${machine.name}] Deploy failed: ${err.message}\n` });
       return;
     }
 
     // Run setup
-    send({ type: 'output', runId, machineId: machine.id, text: `[${machine.name}] Running setup...\n` });
+    log('RUN', `[${machine.name}] Phase 2: Running setup.sh (installing dependencies)...`);
+    send({ type: 'output', runId, machineId: machine.id, text: `[${machine.name}] Phase 2: Running setup.sh (installing dependencies)...\n` });
     try {
-      await runner.execCommand('cd ~/stress-benchmarks && bash setup.sh 2>&1', (text) => {
+      const { exitCode } = await runner.execCommand('cd ~/stress-benchmarks && bash setup.sh 2>&1', (text) => {
         send({ type: 'output', runId, machineId: machine.id, text });
-      }, 300000);
+      }, 300000, { signal: abortController.signal });
+      log('RUN', `[${machine.name}] Setup finished (exit=${exitCode})`);
     } catch (err) {
+      if (runState.aborted) return;
+      log('RUN', `[${machine.name}] Setup warning: ${err.message}`);
       send({ type: 'output', runId, machineId: machine.id, text: `[${machine.name}] Setup warning: ${err.message}\n` });
     }
 
     // Run each benchmark sequentially on this machine
-    for (const benchId of benchmarkIds) {
+    log('RUN', `[${machine.name}] Phase 3: Running ${benchmarkIds.length} benchmark(s)...`);
+    send({ type: 'output', runId, machineId: machine.id, text: `\n[${machine.name}] Phase 3: Running ${benchmarkIds.length} benchmark(s)...\n` });
+
+    for (let bi = 0; bi < benchmarkIds.length; bi++) {
+      const benchId = benchmarkIds[bi];
+
       if (runState.aborted) {
-        send({ type: 'output', runId, machineId: machine.id, text: `\n[${machine.name}] Run aborted.\n` });
+        log('RUN', `[${machine.name}] Run aborted, skipping remaining benchmarks`);
+        send({ type: 'output', runId, machineId: machine.id, text: `\n[${machine.name}] Run aborted by user.\n` });
         break;
       }
 
       const bench = BENCHMARKS[benchId];
-      if (!bench) continue;
+      if (!bench) {
+        log('RUN', `[${machine.name}] Unknown benchmark "${benchId}", skipping`);
+        continue;
+      }
+
+      const benchNum = `[${bi + 1}/${benchmarkIds.length}]`;
 
       // Network benchmarks need a target
       if (bench.needsTarget) {
         const otherMachines = selectedMachines.filter(m => m.id !== machine.id);
         if (otherMachines.length === 0) {
-          send({ type: 'output', runId, machineId: machine.id, text: `\n[${machine.name}] Skipping ${bench.name} — needs another machine.\n` });
+          log('RUN', `[${machine.name}] ${benchNum} Skipping "${bench.name}" — needs another machine as target`);
+          send({ type: 'output', runId, machineId: machine.id, text: `\n${benchNum} Skipping ${bench.name} — needs another machine as target.\n` });
           completed++;
           send({ type: 'progress', runId, completed, total: totalBenchmarks });
           continue;
         }
         // Run against first other machine
         const target = otherMachines[0];
+        log('RUN', `[${machine.name}] ${benchNum} "${bench.name}" targeting ${target.name} (${target.host})`);
 
         if (benchId === 'network_ssh_overhead') {
           // Measure from server side
           send({ type: 'benchmark_start', runId, machineId: machine.id, benchmarkId: benchId, name: bench.name });
+          send({ type: 'output', runId, machineId: machine.id, text: `\n${benchNum} ${bench.name} — measuring SSH overhead to ${machine.host}...\n` });
           try {
             const sshTime = await runner.measureSSHOverhead();
             const resultLine = `SSH connection + trivial command: ${sshTime.toFixed(3)}s\nRESULT:network_ssh_overhead:${sshTime.toFixed(4)}`;
             send({ type: 'output', runId, machineId: machine.id, text: resultLine + '\n' });
             runResults.benchmarks[machine.id][benchId] = sshTime;
             send({ type: 'benchmark_result', runId, machineId: machine.id, benchmarkId: benchId, seconds: sshTime });
+            log('RUN', `[${machine.name}] ${benchNum} "${bench.name}" result: ${sshTime.toFixed(3)}s`);
           } catch (err) {
+            log('RUN', `[${machine.name}] ${benchNum} "${bench.name}" FAILED: ${err.message}`);
             send({ type: 'output', runId, machineId: machine.id, text: `Error: ${err.message}\n` });
           }
           completed++;
@@ -218,15 +278,19 @@ async function handleRunBenchmarks(ws, msg) {
 
         const cmd = bench.buildRun(target.host);
         send({ type: 'benchmark_start', runId, machineId: machine.id, benchmarkId: benchId, name: bench.name });
+        send({ type: 'output', runId, machineId: machine.id, text: `\n${benchNum} ${bench.name} (target: ${target.name})...\n` });
         const startTime = Date.now();
         try {
           const { output } = await runner.execCommand(cmd, (text) => {
             send({ type: 'output', runId, machineId: machine.id, text });
-          }, 120000);
+          }, 120000, { signal: abortController.signal });
           const seconds = parseResult(output, benchId) || (Date.now() - startTime) / 1000;
           runResults.benchmarks[machine.id][benchId] = seconds;
           send({ type: 'benchmark_result', runId, machineId: machine.id, benchmarkId: benchId, seconds });
+          log('RUN', `[${machine.name}] ${benchNum} "${bench.name}" result: ${seconds.toFixed(3)}s`);
         } catch (err) {
+          if (runState.aborted) break;
+          log('RUN', `[${machine.name}] ${benchNum} "${bench.name}" FAILED: ${err.message}`);
           send({ type: 'output', runId, machineId: machine.id, text: `Error: ${err.message}\n` });
         }
         completed++;
@@ -236,32 +300,44 @@ async function handleRunBenchmarks(ws, msg) {
 
       // Setup step if benchmark has one
       if (bench.setup) {
-        send({ type: 'output', runId, machineId: machine.id, text: `\n[${machine.name}] Setting up ${bench.name}...\n` });
+        log('RUN', `[${machine.name}] ${benchNum} Setting up "${bench.name}"...`);
+        send({ type: 'output', runId, machineId: machine.id, text: `\n${benchNum} Setting up ${bench.name}...\n` });
         try {
           await runner.execCommand(bench.setup, (text) => {
             send({ type: 'output', runId, machineId: machine.id, text });
-          }, 300000);
+          }, 300000, { signal: abortController.signal });
+          log('RUN', `[${machine.name}] ${benchNum} Setup for "${bench.name}" complete`);
         } catch (err) {
+          if (runState.aborted) break;
+          log('RUN', `[${machine.name}] ${benchNum} Setup for "${bench.name}" error: ${err.message}`);
           send({ type: 'output', runId, machineId: machine.id, text: `Setup error: ${err.message}\n` });
         }
       }
 
-      send({ type: 'output', runId, machineId: machine.id, text: `\n[${machine.name}] ▶ Running ${bench.name}...\n` });
+      log('RUN', `[${machine.name}] ${benchNum} Running "${bench.name}"...`);
+      send({ type: 'output', runId, machineId: machine.id, text: `\n${benchNum} ▶ Running ${bench.name}...\n` });
       send({ type: 'benchmark_start', runId, machineId: machine.id, benchmarkId: benchId, name: bench.name });
 
       const startTime = Date.now();
       try {
-        const { output } = await runner.execCommand(bench.run, (text) => {
+        const { output, exitCode } = await runner.execCommand(bench.run, (text) => {
           send({ type: 'output', runId, machineId: machine.id, text });
-        }, 600000);
+        }, 600000, { signal: abortController.signal });
 
         const elapsed = (Date.now() - startTime) / 1000;
         const seconds = parseResult(output, benchId) || elapsed;
         runResults.benchmarks[machine.id][benchId] = seconds;
         send({ type: 'benchmark_result', runId, machineId: machine.id, benchmarkId: benchId, seconds, elapsed });
-        send({ type: 'output', runId, machineId: machine.id, text: `[${machine.name}] ✓ ${bench.name}: ${seconds.toFixed(3)}s\n` });
+        log('RUN', `[${machine.name}] ${benchNum} ✓ "${bench.name}": ${seconds.toFixed(3)}s (exit=${exitCode}, wall=${elapsed.toFixed(1)}s)`);
+        send({ type: 'output', runId, machineId: machine.id, text: `${benchNum} ✓ ${bench.name}: ${seconds.toFixed(3)}s\n` });
       } catch (err) {
-        send({ type: 'output', runId, machineId: machine.id, text: `[${machine.name}] ✗ ${bench.name} failed: ${err.message}\n` });
+        if (runState.aborted) {
+          log('RUN', `[${machine.name}] ${benchNum} "${bench.name}" aborted`);
+          send({ type: 'output', runId, machineId: machine.id, text: `${benchNum} ✗ ${bench.name} aborted\n` });
+          break;
+        }
+        log('RUN', `[${machine.name}] ${benchNum} ✗ "${bench.name}" FAILED: ${err.message}`);
+        send({ type: 'output', runId, machineId: machine.id, text: `${benchNum} ✗ ${bench.name} failed: ${err.message}\n` });
         send({ type: 'benchmark_result', runId, machineId: machine.id, benchmarkId: benchId, error: err.message });
       }
 
@@ -277,6 +353,7 @@ async function handleRunBenchmarks(ws, msg) {
   allResults.push(runResults);
   saveResults(allResults);
 
+  log('RUN', `=== Run ${runId} complete (aborted=${runState.aborted}) ===`);
   send({ type: 'run_complete', runId, results: runResults });
   activeRuns.delete(runId);
 }
@@ -293,5 +370,17 @@ function parseResult(output, benchId) {
 
 // ── Start ───────────────────────────────────────────────
 server.listen(PORT, () => {
-  console.log(`Stress Benchmark Suite running at http://localhost:${PORT}`);
+  log('SERVER', `==============================================`);
+  log('SERVER', `  Stress Benchmark Suite v1.0`);
+  log('SERVER', `  HTTP + WebSocket on http://localhost:${PORT}`);
+  log('SERVER', `  Machines config: ${MACHINES_FILE}`);
+  log('SERVER', `  Results storage: ${RESULTS_FILE}`);
+  log('SERVER', `==============================================`);
+  const existingMachines = loadMachines();
+  if (existingMachines.length > 0) {
+    log('SERVER', `Loaded ${existingMachines.length} machine(s):`);
+    existingMachines.forEach(m => log('SERVER', `  - "${m.name}" (${m.username}@${m.host}:${m.port})`));
+  } else {
+    log('SERVER', 'No machines configured yet. Add one via the web UI.');
+  }
 });
