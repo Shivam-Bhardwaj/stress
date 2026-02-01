@@ -6,16 +6,16 @@ echo "=== Stress Benchmark Setup ==="
 if command -v apt-get &>/dev/null; then
   PM="apt-get"
   sudo apt-get update -qq
-  sudo apt-get install -y -qq build-essential bc python3 python3-pip python3-venv curl
+  sudo apt-get install -y -qq build-essential bc python3 python3-pip python3-venv curl pkg-config libssl-dev
 elif command -v dnf &>/dev/null; then
   PM="dnf"
-  sudo dnf install -y gcc gcc-c++ make bc python3 python3-pip curl
+  sudo dnf install -y gcc gcc-c++ make bc python3 python3-pip curl pkgconf-pkg-config openssl-devel
 elif command -v pacman &>/dev/null; then
   PM="pacman"
-  sudo pacman -Sy --noconfirm base-devel bc python python-pip curl
+  sudo pacman -Sy --noconfirm base-devel bc python python-pip curl pkgconf openssl
 elif command -v brew &>/dev/null; then
   PM="brew"
-  brew install bc python3 curl
+  brew install bc python3 curl pkg-config openssl
 fi
 
 # Install Rust if not present
