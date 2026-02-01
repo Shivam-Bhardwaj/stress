@@ -1,5 +1,5 @@
 CXX = g++
-CXXFLAGS = -O2 -std=c++17 -Wall
+CXXFLAGS = -O2 -std=c++20 -Wall
 SRCS = main.cpp math_lib.cpp container_lib.cpp string_lib.cpp
 OBJS = $(SRCS:.cpp=.o)
 TARGET = compile_bench
