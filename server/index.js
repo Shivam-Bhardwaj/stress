@@ -199,9 +199,14 @@ async function handleRunBenchmarks(ws, msg) {
     try {
       await runner.deployBenchmarks((text) => {
         send({ type: 'output', runId, machineId: machine.id, text: `[${machine.name}] ${text}` });
-      });
+      }, { signal: abortController.signal, timeoutMs: 180000 });
       log('RUN', `[${machine.name}] Deploy complete`);
     } catch (err) {
+      if (runState.aborted || err.message === 'Aborted') {
+        log('RUN', `[${machine.name}] Deploy aborted`);
+        send({ type: 'output', runId, machineId: machine.id, text: `[${machine.name}] Deploy aborted.\n` });
+        return;
+      }
       log('RUN', `[${machine.name}] Deploy FAILED: ${err.message}`);
       send({ type: 'output', runId, machineId: machine.id, text: `[${machine.name}] Deploy failed: ${err.message}\n` });
       return;
@@ -261,15 +266,20 @@ async function handleRunBenchmarks(ws, msg) {
           send({ type: 'benchmark_start', runId, machineId: machine.id, benchmarkId: benchId, name: bench.name });
           send({ type: 'output', runId, machineId: machine.id, text: `\n${benchNum} ${bench.name} — measuring SSH overhead to ${machine.host}...\n` });
           try {
-            const sshTime = await runner.measureSSHOverhead();
+            const sshTime = await runner.measureSSHOverhead({ signal: abortController.signal, timeoutMs: 20000 });
             const resultLine = `SSH connection + trivial command: ${sshTime.toFixed(3)}s\nRESULT:network_ssh_overhead:${sshTime.toFixed(4)}`;
             send({ type: 'output', runId, machineId: machine.id, text: resultLine + '\n' });
             runResults.benchmarks[machine.id][benchId] = sshTime;
             send({ type: 'benchmark_result', runId, machineId: machine.id, benchmarkId: benchId, seconds: sshTime });
             log('RUN', `[${machine.name}] ${benchNum} "${bench.name}" result: ${sshTime.toFixed(3)}s`);
           } catch (err) {
-            log('RUN', `[${machine.name}] ${benchNum} "${bench.name}" FAILED: ${err.message}`);
-            send({ type: 'output', runId, machineId: machine.id, text: `Error: ${err.message}\n` });
+            if (runState.aborted || err.message === 'Aborted') {
+              log('RUN', `[${machine.name}] ${benchNum} "${bench.name}" aborted`);
+              send({ type: 'output', runId, machineId: machine.id, text: `\n${benchNum} ${bench.name} aborted.\n` });
+            } else {
+              log('RUN', `[${machine.name}] ${benchNum} "${bench.name}" FAILED: ${err.message}`);
+              send({ type: 'output', runId, machineId: machine.id, text: `Error: ${err.message}\n` });
+            }
           }
           completed++;
           send({ type: 'progress', runId, completed, total: totalBenchmarks });

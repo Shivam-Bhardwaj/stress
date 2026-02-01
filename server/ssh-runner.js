@@ -69,19 +69,58 @@ class SSHRunner {
   }
 
   /** Deploy benchmarks folder to remote machine via SCP */
-  deployBenchmarks(onOutput) {
+  deployBenchmarks(onOutput, opts = {}) {
+    const { signal, timeoutMs = 180000 } = opts;
     return new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        return reject(new Error('Aborted'));
+      }
+
       const conn = new Client();
+      let timer = null;
+      let settled = false;
+
+      const finish = (err) => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        if (signal) signal.removeEventListener('abort', onAbort);
+        if (err) reject(err);
+        else resolve();
+      };
+
+      const onAbort = () => {
+        log(this.label, 'Deploy received abort signal, terminating connection...');
+        onOutput && onOutput('\n[abort] Aborting deploy...\n');
+        if (timer) clearTimeout(timer);
+        conn.end();
+        finish(new Error('Aborted'));
+      };
+
+      if (signal) {
+        signal.addEventListener('abort', onAbort, { once: true });
+      }
+
+      timer = setTimeout(() => {
+        log(this.label, `Deploy TIMED OUT after ${timeoutMs / 1000}s`);
+        onOutput && onOutput('\n[timeout] Deploy exceeded time limit, killing...\n');
+        conn.end();
+        finish(new Error('Deploy timed out'));
+      }, timeoutMs);
+
       log(this.label, 'Opening SSH connection for benchmark deployment...');
       conn
         .on('ready', () => {
+          if (signal?.aborted) {
+            return onAbort();
+          }
           log(this.label, 'SSH connected, starting SFTP session for deploy...');
           onOutput && onOutput('[deploy] Connected, uploading benchmarks...\n');
           conn.sftp((err, sftp) => {
             if (err) {
               log(this.label, `SFTP session failed: ${err.message}`);
               conn.end();
-              return reject(err);
+              return finish(err);
             }
             // Use tar to transfer the benchmarks directory
             const benchmarksDir = path.resolve(__dirname, '..', 'benchmarks');
@@ -95,26 +134,30 @@ class SSHRunner {
             } catch (e) {
               log(this.label, `Failed to create tar: ${e.message}`);
               conn.end();
-              return reject(new Error('Failed to create tar: ' + e.message));
+              return finish(new Error('Failed to create tar: ' + e.message));
+            }
+
+            if (signal?.aborted) {
+              return onAbort();
             }
 
             // Extract on remote
             log(this.label, 'Streaming tar to remote and extracting to ~/stress-benchmarks...');
             onOutput && onOutput(`[deploy] Uploading ${(tarData.length / 1024).toFixed(1)} KB archive...\n`);
             conn.exec('mkdir -p ~/stress-benchmarks && tar xf - -C ~/ --transform "s/^benchmarks/stress-benchmarks/"', (err2, stream) => {
-              if (err2) { conn.end(); return reject(err2); }
+              if (err2) { conn.end(); return finish(err2); }
               stream.on('close', (code) => {
                 if (code !== 0) {
                   log(this.label, 'tar --transform failed (possibly macOS), retrying with mv fallback...');
                   onOutput && onOutput('[deploy] Retrying extract with fallback method...\n');
                   // Try without --transform (macOS tar doesn't support it)
                   conn.exec('rm -rf ~/stress-benchmarks && mkdir -p ~/stress-benchmarks && tar xf - -C ~/ && mv ~/benchmarks ~/stress-benchmarks 2>/dev/null; true', (err3, stream2) => {
-                    if (err3) { conn.end(); return reject(err3); }
+                    if (err3) { conn.end(); return finish(err3); }
                     stream2.on('close', () => {
                       log(this.label, 'Benchmarks deployed successfully (fallback method)');
                       onOutput && onOutput('[deploy] Benchmarks uploaded.\n');
                       conn.end();
-                      resolve();
+                      finish();
                     });
                     stream2.stdin.write(tarData);
                     stream2.stdin.end();
@@ -123,7 +166,7 @@ class SSHRunner {
                   log(this.label, 'Benchmarks deployed successfully');
                   onOutput && onOutput('[deploy] Benchmarks uploaded.\n');
                   conn.end();
-                  resolve();
+                  finish();
                 }
               });
               stream.stdin.write(tarData);
@@ -133,7 +176,7 @@ class SSHRunner {
         })
         .on('error', (err) => {
           log(this.label, `Deploy connection FAILED: ${err.message}`);
-          reject(err);
+          finish(err);
         })
         .connect(this._connOpts());
     });
@@ -216,29 +259,65 @@ class SSHRunner {
   }
 
   /** Measure SSH connection overhead */
-  measureSSHOverhead() {
+  measureSSHOverhead(opts = {}) {
+    const { signal, timeoutMs = 20000 } = opts;
     return new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        return reject(new Error('Aborted'));
+      }
+
       const start = Date.now();
       const conn = new Client();
+      let timer = null;
+      let settled = false;
+
+      const finish = (err, val) => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        if (signal) signal.removeEventListener('abort', onAbort);
+        if (err) reject(err);
+        else resolve(val);
+      };
+
+      const onAbort = () => {
+        log(this.label, 'SSH overhead measurement aborted');
+        conn.end();
+        finish(new Error('Aborted'));
+      };
+
+      if (signal) {
+        signal.addEventListener('abort', onAbort, { once: true });
+      }
+
+      timer = setTimeout(() => {
+        log(this.label, `SSH overhead measurement TIMED OUT after ${timeoutMs / 1000}s`);
+        conn.end();
+        finish(new Error('SSH overhead timed out'));
+      }, timeoutMs);
+
       log(this.label, 'Measuring SSH overhead (connect + echo ok)...');
       conn
         .on('ready', () => {
+          if (signal?.aborted) {
+            return onAbort();
+          }
           const readyTime = Date.now() - start;
           log(this.label, `SSH handshake: ${readyTime}ms, now running trivial command...`);
           conn.exec('echo ok', (err, stream) => {
-            if (err) { conn.end(); return reject(err); }
+            if (err) { conn.end(); return finish(err); }
             stream.on('close', () => {
               const elapsed = (Date.now() - start) / 1000;
               log(this.label, `SSH overhead total: ${elapsed.toFixed(3)}s`);
               conn.end();
-              resolve(elapsed);
+              finish(null, elapsed);
             });
             stream.resume();
           });
         })
         .on('error', (err) => {
           log(this.label, `SSH overhead measurement failed: ${err.message}`);
-          reject(err);
+          finish(err);
         })
         .connect(this._connOpts());
     });
