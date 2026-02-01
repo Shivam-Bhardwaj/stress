@@ -22,6 +22,8 @@ STRESS_DURATION=10 bash run_all.sh  # ~10 minutes (default)
 STRESS_DURATION=30 bash run_all.sh  # ~30 minutes
 ```
 
+If `STRESS_DURATION` is not set, the runner will prompt you to choose 5/10/30.
+
 Scaling & overrides:
 
 ```bash

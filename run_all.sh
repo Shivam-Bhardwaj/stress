@@ -132,6 +132,22 @@ apply_duration_profile() {
   esac
 }
 
+prompt_duration() {
+  echo "Select duration profile: 5 / 10 / 30 minutes"
+  echo "Press Enter for 10."
+  read -r duration_input
+  duration_input="${duration_input,,}"
+  if [ -z "$duration_input" ]; then
+    STRESS_DURATION=10
+  else
+    STRESS_DURATION="$duration_input"
+  fi
+}
+
+if [ -z "${STRESS_DURATION:-}" ]; then
+  prompt_duration
+fi
+
 apply_duration_profile
 
 bench_names=(
