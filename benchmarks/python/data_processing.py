@@ -1,13 +1,37 @@
 #!/usr/bin/env python3
-"""Data Processing Benchmark: 1M-row pandas pipeline."""
+"""Data Processing Benchmark: pandas pipeline with size scaled to RAM."""
+import os
 import time
 import numpy as np
 import pandas as pd
 
+def read_mem_total_mb():
+    try:
+        with open("/proc/meminfo", "r", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    parts = line.split()
+                    return int(parts[1]) // 1024
+    except OSError:
+        return None
+    return None
+
 def main():
-    print("Data Processing Benchmark: 1M rows")
+    mem_mb = read_mem_total_mb()
+    if "STRESS_ROWS" in os.environ:
+        n = int(os.environ["STRESS_ROWS"])
+    else:
+        # Target ~15% of RAM, cap at 1M rows, floor 200k rows.
+        # Roughly assumes ~200 bytes/row.
+        if mem_mb is None:
+            n = 1_000_000
+        else:
+            target_mb = min(int(mem_mb * 0.15), 800)
+            n = int((target_mb * 1024 * 1024) / 200)
+            n = max(200_000, min(1_000_000, n))
+
+    print(f"Data Processing Benchmark: {n:,} rows")
     np.random.seed(42)
-    n = 1_000_000
 
     print("Generating data...")
     df = pd.DataFrame({

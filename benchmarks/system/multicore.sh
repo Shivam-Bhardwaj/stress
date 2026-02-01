@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
 echo "=== Multi-core Scaling Benchmark ==="
 
 TOTAL_CORES=$(nproc)
@@ -7,14 +7,27 @@ echo "Available cores: $TOTAL_CORES"
 
 # Create a CPU-intensive worker
 TMPDIR=$(mktemp -d)
+ITER_BASE="${STRESS_MULTICORE_ITERS:-50000000}"
+if [ -n "${STRESS_MULTICORE_SCALE:-}" ]; then
+  ITER_SCALE="${STRESS_MULTICORE_SCALE}"
+else
+  ITER_SCALE=$((TOTAL_CORES / 4))
+  if [ "$ITER_SCALE" -lt 1 ]; then ITER_SCALE=1; fi
+fi
+ITERATIONS=$((ITER_BASE * ITER_SCALE))
+
 cat > "$TMPDIR/worker.c" << 'CEOF'
 #include <stdio.h>
 #include <math.h>
 
+#ifndef ITERATIONS
+#define ITERATIONS 50000000L
+#endif
+
 int main() {
     // CPU-intensive computation: compute many square roots
     double sum = 0;
-    for (long i = 0; i < 50000000L; i++) {
+    for (long i = 0; i < ITERATIONS; i++) {
         sum += sin((double)i * 0.000001) * cos((double)i * 0.000002);
     }
     printf("%.6f\n", sum);
@@ -22,7 +35,7 @@ int main() {
 }
 CEOF
 
-gcc -O2 -o "$TMPDIR/worker" "$TMPDIR/worker.c" -lm
+gcc -O2 -DITERATIONS="${ITERATIONS}L" -o "$TMPDIR/worker" "$TMPDIR/worker.c" -lm
 
 WORK_PER_CORE=1  # Each core runs 1 worker instance
 

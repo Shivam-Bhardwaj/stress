@@ -6,8 +6,14 @@ import os
 import tempfile
 from aiohttp import web, ClientSession, TCPConnector
 
-TOTAL_REQUESTS = 10_000
-CONCURRENCY = 100
+def scaled(default, env_key, min_v, max_v):
+    if env_key in os.environ:
+        return int(os.environ[env_key])
+    return max(min_v, min(default, max_v))
+
+cores = os.cpu_count() or 1
+TOTAL_REQUESTS = scaled(cores * 2000, "STRESS_ASYNC_REQUESTS", 2000, 20000)
+CONCURRENCY = scaled(cores * 50, "STRESS_ASYNC_CONCURRENCY", 50, 400)
 PORT = 18788
 
 request_count = 0
@@ -44,7 +50,7 @@ async def run_clients():
 async def file_io_bench():
     """Concurrent file I/O operations."""
     tmpdir = tempfile.mkdtemp()
-    files = 1000
+    files = scaled(cores * 200, "STRESS_ASYNC_FILES", 200, 2000)
     data = b"x" * 4096
 
     async def write_file(i):
