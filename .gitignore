@@ -1,0 +1,10 @@
+node_modules/
+machines.json
+results.json
+target/
+*.o
+*.exe
+compile_bench/compile_bench
+raytracer
+sorting
+*.dat
