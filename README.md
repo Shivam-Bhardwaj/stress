@@ -124,3 +124,20 @@ Then restart SSH:
 ```bash
 sudo systemctl restart ssh
 ```
+
+## Interactive Thermal/Stress UI
+
+Run the interactive CPU/RAM/Disk stress test with a live ASCII graph:
+
+```bash
+python3 benchmarks/system/stress_all.py
+```
+
+Controls:
+- Press `Q` to stop and print a short report.
+
+Options:
+```bash
+python3 benchmarks/system/stress_all.py --mem-mb 4096 --cpu-workers 8
+python3 benchmarks/system/stress_all.py --no-disk
+```
