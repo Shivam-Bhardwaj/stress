@@ -102,10 +102,27 @@ def read_temp_c():
     return max_millic / 1000.0
 
 
-def cpu_worker(stop: Event):
+def cpu_spin(steps: int):
     x = 0
+    for _ in range(steps):
+        x = (x * 1664525 + 1013904223) & 0xFFFFFFFF
+    return x
+
+
+def cpu_worker(stop: Event, ops: Value):
+    x = 0
+    local = 0
+    stride = 100000
     while not stop.is_set():
         x = (x * 1664525 + 1013904223) & 0xFFFFFFFF
+        local += 1
+        if local >= stride:
+            with ops.get_lock():
+                ops.value += local
+            local = 0
+    if local:
+        with ops.get_lock():
+            ops.value += local
     return x
 
 
@@ -207,9 +224,17 @@ def main():
         if disk_max > 8 * 1024 * 1024 * 1024:
             disk_max = 8 * 1024 * 1024 * 1024
 
+    # Single-core baseline throughput (ops/sec)
+    baseline_steps = 2_000_000
+    t0 = time.perf_counter()
+    cpu_spin(baseline_steps)
+    t1 = time.perf_counter()
+    single_ops_s = baseline_steps / max(1e-6, (t1 - t0))
+
+    ops = Value("L", 0)
     procs = []
     for _ in range(cpu_workers):
-        p = Process(target=cpu_worker, args=(stop,))
+        p = Process(target=cpu_worker, args=(stop, ops))
         p.daemon = True
         p.start()
         procs.append(p)
@@ -248,6 +273,7 @@ def main():
         prev_cpu = read_cpu_times()
         last_bytes = 0
         start = time.time()
+        last_ops = 0
         initial_freq = read_freq_khz()
         min_freq = initial_freq if initial_freq > 0 else 0
         max_temp = 0.0
@@ -279,6 +305,12 @@ def main():
             disk_mb_s = delta_bytes / (1024 * 1024) / max(0.2, (time.time() - now))
             disk_hist.append(disk_mb_s)
 
+            with ops.get_lock():
+                total_ops = ops.value
+            delta_ops = total_ops - last_ops
+            last_ops = total_ops
+            ops_s = delta_ops / max(0.2, (time.time() - now))
+
             temp = read_temp_c()
             freq = read_freq_khz()
             if freq > 0 and (min_freq == 0 or freq < min_freq):
@@ -298,20 +330,21 @@ def main():
             stdscr.addstr(5, 0, f"MEM  {mem_pct:6.1f}% | {bar(mem_pct, 100.0, graph_w)}")
             dsk_max = max(disk_hist) if disk_hist else 1.0
             stdscr.addstr(6, 0, f"DSK  {disk_mb_s:6.1f}MB/s | {bar(disk_mb_s, dsk_max, graph_w)}")
+            stdscr.addstr(7, 0, f"OPS  {ops_s/1e6:6.2f}M/s  (1c {single_ops_s/1e6:6.2f}M/s)")
             if initial_freq > 0 and min_freq > 0:
                 drop_pct = max(0.0, (1.0 - (min_freq / initial_freq)) * 100.0)
                 throttle_flag = "YES" if drop_pct >= 15.0 else "no"
                 stdscr.addstr(
-                    7,
+                    8,
                     0,
                     f"FRQ  {freq/1000:6.2f}GHz min {min_freq/1000:6.2f}GHz "
                     f"drop {drop_pct:4.0f}% | throttle: {throttle_flag}",
                 )
             if max_temp > 0:
-                stdscr.addstr(8, 0, f"TEMP {temp:6.1f}C max {max_temp:6.1f}C")
+                stdscr.addstr(9, 0, f"TEMP {temp:6.1f}C max {max_temp:6.1f}C")
             with disk_error.get_lock():
                 if disk_error.value == 1:
-                    stdscr.addstr(9, 0, "DISK ERROR: No space left; disk stress stopped.")
+                    stdscr.addstr(10, 0, "DISK ERROR: No space left; disk stress stopped.")
 
             stdscr.refresh()
             time.sleep(0.8)
@@ -327,6 +360,7 @@ def main():
     mem_total_mb, mem_used_mb = read_mem_used_mb()
     print("=== Stress All Report ===")
     print(f"CPU workers: {cpu_workers}")
+    print(f"CPU single-core ops/s: {single_ops_s:.0f}")
     print(f"Memory target: {mem_target} MB")
     print(f"Memory used: {mem_used_mb}/{mem_total_mb} MB")
     if initial_freq > 0 and min_freq > 0:

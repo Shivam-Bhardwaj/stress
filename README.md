@@ -148,3 +148,4 @@ Graph legend:
 - CPU/MEM bars are % utilization (0–100).
 - DSK is write throughput (MB/s). It writes to a capped file and rewrites in place.
 - FRQ shows average CPU frequency; a large drop indicates throttling.
+- OPS shows raw compute throughput (ops/sec); 1c is single-core baseline.
