@@ -140,4 +140,11 @@ Options:
 ```bash
 python3 benchmarks/system/stress_all.py --mem-mb 4096 --cpu-workers 8
 python3 benchmarks/system/stress_all.py --no-disk
+python3 benchmarks/system/stress_all.py --disk-gb 2
+python3 benchmarks/system/stress_all.py --temp-dir /var/tmp
 ```
+
+Graph legend:
+- CPU/MEM bars are % utilization (0–100).
+- DSK is write throughput (MB/s). It writes to a capped file and rewrites in place.
+- FRQ shows average CPU frequency; a large drop indicates throttling.
