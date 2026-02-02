@@ -71,3 +71,56 @@ bash run_all.sh
 ### Network
 - **Latency** — ping round-trip to `STRESS_NET_TARGET` (default 1.1.1.1)
 - **Throughput** — iperf3 client to `STRESS_IPERF_TARGET` (set env var)
+
+## SSH Setup Notes (New Machine → New Server)
+
+Goal: connect from a different machine (Windows/macOS/Linux) to a fresh Linux server.
+
+### Generate a key (client machine)
+Linux/macOS:
+```bash
+ssh-keygen -t ed25519 -C "you@example.com"
+```
+
+Windows (PowerShell):
+```powershell
+ssh-keygen -t ed25519 -C "you@example.com"
+```
+
+### Add the public key to the server
+Option A — one-liner (recommended):
+```bash
+ssh-copy-id root@SERVER_IP
+```
+
+Option B — manual:
+```bash
+cat ~/.ssh/id_ed25519.pub
+```
+Copy the output, then on the server:
+```bash
+mkdir -p ~/.ssh
+chmod 700 ~/.ssh
+echo "PASTE_PUBLIC_KEY_HERE" >> ~/.ssh/authorized_keys
+chmod 600 ~/.ssh/authorized_keys
+```
+
+### Connect
+```bash
+ssh root@SERVER_IP
+```
+
+### Windows tips
+- Termius: create a new host, add username + IP, then add your private key.
+- Built-in OpenSSH: use PowerShell/Windows Terminal with `ssh root@SERVER_IP`.
+
+### Optional hardening (server)
+Edit `/etc/ssh/sshd_config` and set:
+```
+PasswordAuthentication no
+PermitRootLogin prohibit-password
+```
+Then restart SSH:
+```bash
+sudo systemctl restart ssh
+```
