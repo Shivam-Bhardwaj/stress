@@ -20,6 +20,21 @@ CUDA_PID=""
 cleanup() {
   if [ -n "$CUDA_PID" ] && kill -0 "$CUDA_PID" 2>/dev/null; then
     kill "$CUDA_PID" 2>/dev/null || true
+    child_pids=$(ps -o pid= --ppid "$CUDA_PID" 2>/dev/null || true)
+    for pid in $child_pids; do
+      kill "$pid" 2>/dev/null || true
+    done
+    for _ in 1 2 3 4 5; do
+      if kill -0 "$CUDA_PID" 2>/dev/null; then
+        sleep 0.2
+      else
+        break
+      fi
+    done
+    kill -9 "$CUDA_PID" 2>/dev/null || true
+    for pid in $child_pids; do
+      kill -9 "$pid" 2>/dev/null || true
+    done
   fi
 }
 trap cleanup INT TERM EXIT

@@ -150,6 +150,8 @@ One script to stress CPU/RAM/Disk + GPU (if available) and log CSVs:
 bash run_stress_full.sh
 ```
 
+Note: Ctrl+C stops both Rust + CUDA; the script now force‑terminates lingering GPU workers.
+
 Controls:
 - Python UI: press `Q` to stop and print a short report.
 - Rust UI: press `Ctrl+C` to stop.

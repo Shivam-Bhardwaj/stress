@@ -37,6 +37,22 @@ STREAMS="${STRESS_CUDA_STREAMS:-1}"
 SAMPLE_MS="${STRESS_CUDA_SAMPLE_MS:-1000}"
 CSV_PATH="${STRESS_CUDA_CSV:-}"
 STATUS_PATH="${STRESS_CUDA_STATUS:-}"
+LOAD_PID=""
+
+cleanup() {
+  if [ -n "$LOAD_PID" ] && kill -0 "$LOAD_PID" 2>/dev/null; then
+    kill "$LOAD_PID" 2>/dev/null || true
+    for _ in 1 2 3 4 5; do
+      if kill -0 "$LOAD_PID" 2>/dev/null; then
+        sleep 0.2
+      else
+        break
+      fi
+    done
+    kill -9 "$LOAD_PID" 2>/dev/null || true
+  fi
+}
+trap cleanup INT TERM EXIT
 
 if [ -n "$CSV_PATH" ]; then
   echo "ts,util_gpu,util_mem,temp,sm_clock,mem_clock" > "$CSV_PATH"
@@ -66,4 +82,4 @@ while kill -0 "$LOAD_PID" 2>/dev/null; do
   sleep "$sleep_s"
 done
 
-wait "$LOAD_PID"
+wait "$LOAD_PID" 2>/dev/null || true
