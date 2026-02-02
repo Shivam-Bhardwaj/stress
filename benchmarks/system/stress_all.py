@@ -265,7 +265,21 @@ def main():
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGHUP, handle_signal)
 
+    initial_freq = 0
+    min_freq = 0
+    max_temp = 0.0
+    freq_sum = 0
+    freq_samples = 0
+    cpu_sum = 0.0
+    mem_sum = 0.0
+    disk_sum = 0.0
+    ops_sum = 0.0
+    samples = 0
+    disk_peak = 0.0
+
     def tui(stdscr):
+        nonlocal initial_freq, min_freq, max_temp, freq_sum, freq_samples
+        nonlocal cpu_sum, mem_sum, disk_sum, ops_sum, samples, disk_peak
         curses.curs_set(0)
         stdscr.nodelay(True)
         stdscr.timeout(200)
@@ -273,6 +287,7 @@ def main():
         prev_cpu = read_cpu_times()
         last_bytes = 0
         start = time.time()
+        last_sample = start
         last_ops = 0
         initial_freq = read_freq_khz()
         min_freq = initial_freq if initial_freq > 0 else 0
@@ -286,6 +301,10 @@ def main():
                 break
 
             now = time.time()
+            dt = now - last_sample
+            if dt <= 0:
+                dt = 0.2
+            last_sample = now
             cpu = 0.0
             cur = read_cpu_times()
             if prev_cpu and cur:
@@ -302,14 +321,16 @@ def main():
                 bw = bytes_written.value
             delta_bytes = bw - last_bytes
             last_bytes = bw
-            disk_mb_s = delta_bytes / (1024 * 1024) / max(0.2, (time.time() - now))
+            disk_mb_s = delta_bytes / (1024 * 1024) / dt
             disk_hist.append(disk_mb_s)
+            if disk_mb_s > disk_peak:
+                disk_peak = disk_mb_s
 
             with ops.get_lock():
                 total_ops = ops.value
             delta_ops = total_ops - last_ops
             last_ops = total_ops
-            ops_s = delta_ops / max(0.2, (time.time() - now))
+            ops_s = delta_ops / dt
 
             temp = read_temp_c()
             freq = read_freq_khz()
@@ -317,6 +338,15 @@ def main():
                 min_freq = freq
             if temp > 0 and temp > max_temp:
                 max_temp = temp
+            if freq > 0:
+                freq_sum += freq
+                freq_samples += 1
+
+            cpu_sum += cpu
+            mem_sum += mem_pct
+            disk_sum += disk_mb_s
+            ops_sum += ops_s
+            samples += 1
 
             h, w = stdscr.getmaxyx()
             graph_w = max(10, w - 30)
@@ -337,7 +367,7 @@ def main():
                 stdscr.addstr(
                     8,
                     0,
-                    f"FRQ  {freq/1000:6.2f}GHz min {min_freq/1000:6.2f}GHz "
+                    f"FRQ  {freq/1e6:6.2f}GHz min {min_freq/1e6:6.2f}GHz "
                     f"drop {drop_pct:4.0f}% | throttle: {throttle_flag}",
                 )
             if max_temp > 0:
@@ -365,9 +395,11 @@ def main():
     print(f"Memory used: {mem_used_mb}/{mem_total_mb} MB")
     if initial_freq > 0 and min_freq > 0:
         drop_pct = max(0.0, (1.0 - (min_freq / initial_freq)) * 100.0)
-        print(f"CPU freq start: {initial_freq/1000:.2f} GHz")
-        print(f"CPU freq min:   {min_freq/1000:.2f} GHz")
-        print(f"CPU freq final: {final_freq/1000:.2f} GHz")
+        avg_freq = (freq_sum / freq_samples) if freq_samples > 0 else 0
+        print(f"CPU freq start: {initial_freq/1e6:.2f} GHz")
+        print(f"CPU freq avg:   {avg_freq/1e6:.2f} GHz")
+        print(f"CPU freq min:   {min_freq/1e6:.2f} GHz")
+        print(f"CPU freq final: {final_freq/1e6:.2f} GHz")
         print(f"Freq drop:      {drop_pct:.0f}%")
     if max_temp > 0 or final_temp > 0:
         print(f"Max temp:       {max_temp:.1f} C")
@@ -380,6 +412,17 @@ def main():
         print(f"Disk bytes written: {bw}")
         if derr == 1:
             print("Disk status: stopped due to no space left on device")
+    if samples > 0:
+        avg_ops = ops_sum / samples
+        avg_cpu = cpu_sum / samples
+        avg_mem = mem_sum / samples
+        avg_disk = disk_sum / samples
+        print(f"CPU multi-core ops/s:  {avg_ops:.0f}")
+        if single_ops_s > 0:
+            print(f"CPU scaling (multi/1c): {avg_ops / single_ops_s:.2f}x")
+        print(f"Avg CPU usage: {avg_cpu:.1f}%")
+        print(f"Avg MEM usage: {avg_mem:.1f}%")
+        print(f"Avg DISK: {avg_disk:.1f} MB/s (peak {disk_peak:.1f} MB/s)")
     print(f"Ended at: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(total_sec))}")
 
 
