@@ -10,6 +10,7 @@ VERBOSE="${STRESS_VERBOSE:-0}"
 FAIL_FAST="${STRESS_FAIL_FAST:-0}"
 SMALL_MODE="${STRESS_SMALL:-0}"
 STRESS_DURATION="${STRESS_DURATION:-10}"
+STRESS_RUST_ARGS="${STRESS_RUST_ARGS:-}"
 mkdir -p "$RESULTS_DIR"
 
 echo "=========================================="
@@ -107,6 +108,8 @@ apply_duration_profile() {
       export STRESS_ASYNC_CONCURRENCY="${STRESS_ASYNC_CONCURRENCY:-100}"
       export STRESS_ASYNC_FILES="${STRESS_ASYNC_FILES:-400}"
       export STRESS_ROWS="${STRESS_ROWS:-300000}"
+      export STRESS_RUST_DURATION="${STRESS_RUST_DURATION:-300}"
+      export STRESS_CUDA_DURATION="${STRESS_CUDA_DURATION:-300}"
       export STRESS_SMALL=1
       ;;
     30|30m|30min)
@@ -118,6 +121,8 @@ apply_duration_profile() {
       export STRESS_ASYNC_CONCURRENCY="${STRESS_ASYNC_CONCURRENCY:-200}"
       export STRESS_ASYNC_FILES="${STRESS_ASYNC_FILES:-1200}"
       export STRESS_ROWS="${STRESS_ROWS:-1000000}"
+      export STRESS_RUST_DURATION="${STRESS_RUST_DURATION:-1800}"
+      export STRESS_CUDA_DURATION="${STRESS_CUDA_DURATION:-1800}"
       ;;
     10|10m|10min|*)
       export STRESS_MEM_BW_MB="${STRESS_MEM_BW_MB:-512}"
@@ -128,6 +133,8 @@ apply_duration_profile() {
       export STRESS_ASYNC_CONCURRENCY="${STRESS_ASYNC_CONCURRENCY:-150}"
       export STRESS_ASYNC_FILES="${STRESS_ASYNC_FILES:-800}"
       export STRESS_ROWS="${STRESS_ROWS:-600000}"
+      export STRESS_RUST_DURATION="${STRESS_RUST_DURATION:-600}"
+      export STRESS_CUDA_DURATION="${STRESS_CUDA_DURATION:-600}"
       ;;
   esac
 }
@@ -164,6 +171,8 @@ bench_names=(
   "System: Memory BW"
   "System: Multi-core"
   "System: CPU Single-core"
+  "System: Rust Stress (CPU/RAM/Disk)"
+  "GPU: CUDA Stress"
   "System: Thermal Throttle"
   "Network: Latency"
   "Network: Throughput"
@@ -183,6 +192,8 @@ bench_cmds=(
   "bash $BENCH_DIR/system/memory_bw.sh"
   "bash $BENCH_DIR/system/multicore.sh"
   "bash $BENCH_DIR/system/cpu_single.sh"
+  "cd $BENCH_DIR/rust/stress_all && cargo run --release -- --duration ${STRESS_RUST_DURATION:-600} ${STRESS_RUST_ARGS:-}"
+  "bash $BENCH_DIR/cuda/cuda_stress.sh"
   "bash $BENCH_DIR/system/thermal_throttle.sh"
   "bash $BENCH_DIR/system/network_latency.sh"
   "bash $BENCH_DIR/system/network_throughput.sh"
@@ -202,6 +213,8 @@ bench_groups=(
   "system"
   "system"
   "system"
+  "system"
+  "gpu"
   "system"
   "network"
   "network"
@@ -250,9 +263,11 @@ print_menu() {
     i=$((i+1))
   done
   echo ""
-  echo "Enter numbers (space/comma separated), a group (rust/python/cpp/system), or 'all'."
+  echo "Enter numbers (space/comma separated), a group (rust/python/cpp/system/gpu), or 'all'."
   echo "Press Enter for 'all'."
   echo "Env: STRESS_DURATION=5|10|30 STRESS_VERBOSE=1 STRESS_FAIL_FAST=1 STRESS_SMALL=1"
+  echo "     STRESS_RUST_DURATION=sec STRESS_RUST_ARGS=\"--mem-mb 16000 --disk-gb 10\""
+  echo "     STRESS_CUDA_DURATION=sec STRESS_CUDA_SIZE_MB=1024 STRESS_CUDA_ITERS=256"
   echo ""
 }
 
@@ -288,7 +303,7 @@ selection="${selection,,}"
 
 if [ -z "$selection" ] || [ "$selection" = "all" ]; then
   run_indices $(seq 0 $((${#bench_names[@]} - 1)))
-elif [ "$selection" = "rust" ] || [ "$selection" = "python" ] || [ "$selection" = "cpp" ] || [ "$selection" = "system" ]; then
+elif [ "$selection" = "rust" ] || [ "$selection" = "python" ] || [ "$selection" = "cpp" ] || [ "$selection" = "system" ] || [ "$selection" = "gpu" ]; then
   run_group "$selection"
 else
   selection="${selection//,/ }"

@@ -1,6 +1,7 @@
 node_modules/
 machines.json
 results.json
+results/
 target/
 *.o
 *.exe
@@ -8,3 +9,4 @@ compile_bench/compile_bench
 raytracer
 sorting
 *.dat
+benchmarks/cuda/build/
