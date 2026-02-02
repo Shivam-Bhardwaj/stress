@@ -130,7 +130,7 @@ sudo systemctl restart ssh
 Run the interactive CPU/RAM/Disk stress test with a live ASCII graph:
 
 ```bash
-python3 benchmarks/system/stress_all.py
+bash run_stress_all.sh
 ```
 
 Controls:
