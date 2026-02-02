@@ -210,22 +210,35 @@ def main():
     procs = []
     for _ in range(cpu_workers):
         p = Process(target=cpu_worker, args=(stop,))
+        p.daemon = True
         p.start()
         procs.append(p)
 
     pmem = Process(target=mem_worker, args=(stop, mem_target))
+    pmem.daemon = True
     pmem.start()
     procs.append(pmem)
 
     if enable_disk:
         pdisk = Process(target=disk_worker, args=(stop, bytes_written, tmpdir, disk_max, disk_error))
+        pdisk.daemon = True
         pdisk.start()
         procs.append(pdisk)
 
-    def handle_sigint(_sig, _frame):
+    def cleanup():
         stop.set()
+        for p in procs:
+            if p.is_alive():
+                p.terminate()
+        for p in procs:
+            p.join(timeout=1)
 
-    signal.signal(signal.SIGINT, handle_sigint)
+    def handle_signal(_sig, _frame):
+        cleanup()
+
+    signal.signal(signal.SIGINT, handle_signal)
+    signal.signal(signal.SIGTERM, handle_signal)
+    signal.signal(signal.SIGHUP, handle_signal)
 
     def tui(stdscr):
         curses.curs_set(0)
@@ -306,11 +319,7 @@ def main():
     try:
         curses.wrapper(tui)
     finally:
-        stop.set()
-        for p in procs:
-            p.join(timeout=1)
-            if p.is_alive():
-                p.terminate()
+        cleanup()
 
     total_sec = int(time.time())
     final_freq = read_freq_khz()
