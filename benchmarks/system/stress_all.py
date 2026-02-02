@@ -381,6 +381,8 @@ def main():
 
     try:
         curses.wrapper(tui)
+    except KeyboardInterrupt:
+        cleanup()
     finally:
         cleanup()
 
